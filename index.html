@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WeChat-like Chat</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- 登录界面 -->
+<div id="loginScreen" class="login-screen">
+  <div class="login-box">
+    <h2>登录</h2>
+    <input type="text" id="usernameInput" placeholder="请输入你的名称" maxlength="20">
+    <button id="loginBtn">进入聊天</button>
+    <p class="hint">登录后你的名称和IP归属地将对所有人可见</p>
+  </div>
+</div>
+
+<!-- 主界面 -->
+<div id="app" class="app hidden">
+  <!-- 侧边栏：群聊列表 -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <span id="currentUserName"></span>
+      <button id="newGroupBtn" title="创建新群聊">+</button>
+    </div>
+    <div id="groupList" class="group-list"></div>
+    <div class="sidebar-footer">
+      <span id="userLocation"></span>
+      <button id="logoutBtn">退出</button>
+    </div>
+  </aside>
+
+  <!-- 聊天区域 -->
+  <main class="chat-area">
+    <header class="chat-header">
+      <h3 id="currentGroupName">默认群聊</h3>
+      <span id="onlineCount"></span>
+    </header>
+    <div id="messageList" class="message-list"></div>
+    <footer class="chat-input-bar">
+      <input type="text" id="messageInput" placeholder="输入消息..." maxlength="500">
+      <button id="sendBtn">发送</button>
+    </footer>
+  </main>
+</div>
+
+<!-- 创建群聊弹窗 -->
+<div id="newGroupModal" class="modal hidden">
+  <div class="modal-content">
+    <h3>创建新群聊</h3>
+    <input type="text" id="newGroupNameInput" placeholder="群聊名称" maxlength="30">
+    <div class="modal-buttons">
+      <button id="cancelNewGroup">取消</button>
+      <button id="confirmNewGroup">创建</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
