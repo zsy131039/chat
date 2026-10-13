@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>WeChat-like Chat</title>
+  <title>微信网页版</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -11,39 +11,83 @@
 <!-- 登录界面 -->
 <div id="loginScreen" class="login-screen">
   <div class="login-box">
-    <h2>登录</h2>
+    <div class="logo">💬</div>
+    <h2>微信网页版</h2>
     <input type="text" id="usernameInput" placeholder="请输入你的名称" maxlength="20">
     <button id="loginBtn">进入聊天</button>
-    <p class="hint">登录后你的名称和IP归属地将对所有人可见</p>
+    <p class="hint">登录后名称与 IP 归属地将对其他人可见</p>
   </div>
 </div>
 
 <!-- 主界面 -->
 <div id="app" class="app hidden">
-  <!-- 侧边栏：群聊列表 -->
+  <!-- 左侧边栏 -->
   <aside class="sidebar">
-    <div class="sidebar-header">
-      <span id="currentUserName"></span>
-      <button id="newGroupBtn" title="创建新群聊">+</button>
+    <!-- 顶部头像与搜索 -->
+    <div class="sidebar-top">
+      <div class="user-avatar" id="myAvatar">我</div>
+      <div class="search-box">
+        <input type="text" placeholder="搜索" id="searchInput">
+        <button id="addBtn" class="add-btn">+</button>
+      </div>
     </div>
-    <div id="groupList" class="group-list"></div>
+
+    <!-- 发起群聊下拉菜单 -->
+    <div id="addMenu" class="add-menu hidden">
+      <div class="menu-item" id="menuNewGroup">
+        <span class="icon">💬</span> 发起群聊
+      </div>
+      <div class="menu-item" id="menuAddFriend">
+        <span class="icon">👤</span> 添加朋友
+      </div>
+      <div class="menu-item" id="menuNote">
+        <span class="icon">📝</span> 写笔记
+      </div>
+    </div>
+
+    <!-- 导航标签（聊天/通讯录） -->
+    <div class="sidebar-tabs">
+      <div class="tab active" data-tab="chats">聊天</div>
+      <div class="tab" data-tab="contacts">通讯录</div>
+    </div>
+
+    <!-- 列表区域 -->
+    <div class="list-container" id="chatList">
+      <!-- 动态渲染聊天群组 -->
+    </div>
+    <div class="list-container hidden" id="contactList">
+      <!-- 动态渲染在线用户 -->
+    </div>
+
+    <!-- 底部当前用户信息 -->
     <div class="sidebar-footer">
-      <span id="userLocation"></span>
+      <div class="my-info">
+        <span id="currentUserName"></span>
+        <span class="location" id="userLocation"></span>
+      </div>
       <button id="logoutBtn">退出</button>
     </div>
   </aside>
 
-  <!-- 聊天区域 -->
+  <!-- 右侧聊天区域 -->
   <main class="chat-area">
-    <header class="chat-header">
-      <h3 id="currentGroupName">默认群聊</h3>
-      <span id="onlineCount"></span>
-    </header>
-    <div id="messageList" class="message-list"></div>
-    <footer class="chat-input-bar">
-      <input type="text" id="messageInput" placeholder="输入消息..." maxlength="500">
-      <button id="sendBtn">发送</button>
-    </footer>
+    <!-- 未选中任何聊天时的空白状态 -->
+    <div id="emptyState" class="empty-state">
+      <div class="empty-icon">💬</div>
+    </div>
+
+    <!-- 聊天会话区 -->
+    <div id="chatSession" class="chat-session hidden">
+      <header class="chat-header">
+        <h3 id="currentGroupName">群聊</h3>
+        <span id="onlineCount"></span>
+      </header>
+      <div class="message-list" id="messageList"></div>
+      <footer class="chat-input-bar">
+        <input type="text" id="messageInput" placeholder="输入消息...">
+        <button id="sendBtn">发送</button>
+      </footer>
+    </div>
   </main>
 </div>
 
