@@ -1,111 +1,273 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>微信网页版</title>
-  <link rel="stylesheet" href="style.css">
-</head>
-<body>
+// ============ 配置区 ============
+const SUPABASE_URL = 'https://wewivxsxrmhqeglyhjkj.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_sBYmEDVie3VOjQyxoeJ5Pw_mZaD06vr'; 
+const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-<!-- 登录界面 -->
-<div id="loginScreen" class="login-screen">
-  <div class="login-box">
-    <div class="logo">💬</div>
-    <h2>微信网页版</h2>
-    <input type="text" id="usernameInput" placeholder="请输入你的名称" maxlength="20">
-    <button id="loginBtn">进入聊天</button>
-    <p class="hint">登录后名称与 IP 归属地将对其他人可见</p>
-  </div>
-</div>
+// ============ 状态 ============
+let currentUser = null;
+let currentGroup = null;
+let currentTab = 'chats';
+let presenceChannel = null;
 
-<!-- 主界面 -->
-<div id="app" class="app hidden">
-  <!-- 左侧边栏 -->
-  <aside class="sidebar">
-    <!-- 顶部头像与搜索 -->
-    <div class="sidebar-top">
-      <div class="user-avatar" id="myAvatar">我</div>
-      <div class="search-box">
-        <input type="text" placeholder="搜索" id="searchInput">
-        <button id="addBtn" class="add-btn">+</button>
+// ============ 工具函数 ============
+async function fetchLocation() {
+  try {
+    // 由于你的网页是 HTTPS，必须使用支持 HTTPS 的 IP 接口，否则会被浏览器拦截
+    const res = await fetch('https://ipapi.co/json/');
+    const data = await res.json();
+    if (data.city) return `${data.country_name} · ${data.region} · ${data.city}`;
+  } catch (e) { console.error('获取位置失败', e); }
+  return '未知位置';
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function formatTime(ts) {
+  const d = new Date(ts);
+  return `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
+}
+
+// ============ 登录 ============
+document.getElementById('loginBtn').addEventListener('click', async () => {
+  const name = document.getElementById('usernameInput').value.trim();
+  if (!name) return alert('请输入名称');
+  
+  const location = await fetchLocation();
+  currentUser = { name, location };
+
+  const { error } = await supabaseClient
+    .from('profiles')
+    .upsert({ name, location, last_seen: new Date().toISOString() });
+
+  if (error) {
+    alert('登录失败：' + error.message);
+    return;
+  }
+
+  localStorage.setItem('chat_user', JSON.stringify(currentUser));
+  enterApp();
+});
+
+(async function tryRestore() {
+  const saved = localStorage.getItem('chat_user');
+  if (saved) {
+    currentUser = JSON.parse(saved);
+    await supabaseClient.from('profiles').update({ last_seen: new Date().toISOString() }).eq('name', currentUser.name);
+    enterApp();
+  }
+})();
+
+async function enterApp() {
+  document.getElementById('loginScreen').classList.add('hidden');
+  document.getElementById('app').classList.remove('hidden');
+  document.getElementById('currentUserName').textContent = currentUser.name;
+  document.getElementById('userLocation').textContent = currentUser.location;
+  document.getElementById('myAvatar').textContent = currentUser.name.charAt(0).toUpperCase();
+
+  initPresence();
+  initGroupsRealtime();
+  
+  const { data: groups } = await supabaseClient.from('groups').select('*').order('created_at', { ascending: true }).limit(1);
+  if (groups && groups.length > 0) {
+    selectGroup(groups[0].id, groups[0].name);
+  }
+}
+
+// ============ 在线状态 ============
+function initPresence() {
+  presenceChannel = supabaseClient.channel('online-users', {
+    config: { presence: { key: currentUser.name } }
+  });
+
+  presenceChannel
+    .on('presence', { event: 'sync' }, () => {
+      const state = presenceChannel.presenceState();
+      const onlineUsers = Object.values(state).flat();
+      renderContacts(onlineUsers);
+    })
+    .subscribe(async (status) => {
+      if (status === 'SUBSCRIBED') {
+        await presenceChannel.track({
+          name: currentUser.name,
+          location: currentUser.location,
+          online_at: new Date().toISOString(),
+        });
+      }
+    });
+}
+
+// ============ 群组同步 ============
+async function initGroupsRealtime() {
+  const { data: groups, error } = await supabaseClient.from('groups').select('*').order('created_at', { ascending: true });
+  if (!error && groups) renderGroups(groups);
+
+  supabaseClient.channel('groups-channel')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'groups' }, () => {
+      supabaseClient.from('groups').select('*').order('created_at', { ascending: true }).then(({ data }) => {
+        if (data) renderGroups(data);
+      });
+    })
+    .subscribe();
+}
+
+// ============ 渲染群聊列表 ============
+function renderGroups(groups) {
+  const list = document.getElementById('chatList');
+  list.innerHTML = groups.map(g => `
+    <div class="list-item ${g.id === currentGroup ? 'active' : ''}" data-id="${g.id}" data-name="${escapeHtml(g.name)}">
+      <div class="item-avatar">${escapeHtml(g.name.charAt(0))}</div>
+      <div class="item-info">
+        <div class="item-title">${escapeHtml(g.name)}</div>
+        <div class="item-desc">点击进入聊天</div>
       </div>
     </div>
+  `).join('');
+  
+  list.querySelectorAll('.list-item').forEach(el => {
+    el.addEventListener('click', () => selectGroup(el.dataset.id, el.dataset.name));
+  });
+}
 
-    <!-- 发起群聊下拉菜单 -->
-    <div id="addMenu" class="add-menu hidden">
-      <div class="menu-item" id="menuNewGroup">
-        <span class="icon">💬</span> 发起群聊
+// ============ 选择并加载群聊 ============
+async function selectGroup(groupId, groupName) {
+  currentGroup = groupId;
+  document.getElementById('emptyState').classList.add('hidden');
+  document.getElementById('chatSession').classList.remove('hidden');
+  document.getElementById('currentGroupName').textContent = groupName;
+  
+  document.querySelectorAll('#chatList .list-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.id === groupId);
+  });
+
+  const { data: messages } = await supabaseClient
+    .from('messages')
+    .select('*')
+    .eq('group_id', groupId)
+    .order('created_at', { ascending: true })
+    .limit(100);
+  
+  if (messages) renderMessages(messages);
+
+  supabaseClient.channel(`messages-${groupId}`)
+    .on('postgres_changes', 
+      { event: 'INSERT', schema: 'public', table: 'messages', filter: `group_id=eq.${groupId}` }, 
+      (payload) => appendMessage(payload.new)
+    )
+    .subscribe();
+}
+
+// ============ 渲染通讯录 ============
+function renderContacts(onlineUsers) {
+  const list = document.getElementById('contactList');
+  if (!onlineUsers || onlineUsers.length === 0) {
+    list.innerHTML = '<div style="padding:20px;text-align:center;color:#999;">暂无人在线</div>';
+    return;
+  }
+  const uniqueUsers = Array.from(new Map(onlineUsers.map(u => [u.name, u])).values());
+  list.innerHTML = uniqueUsers.map(u => `
+    <div class="list-item">
+      <div class="item-avatar" style="background:${u.name === currentUser.name ? '#07c160' : '#4a90d9'}">
+        ${escapeHtml(u.name.charAt(0).toUpperCase())}
       </div>
-      <div class="menu-item" id="menuAddFriend">
-        <span class="icon">👤</span> 添加朋友
-      </div>
-      <div class="menu-item" id="menuNote">
-        <span class="icon">📝</span> 写笔记
+      <div class="item-info">
+        <div class="item-title">${escapeHtml(u.name)} ${u.name === currentUser.name ? '(我)' : ''}</div>
+        <div class="item-desc">📍 ${escapeHtml(u.location || '未知')}</div>
       </div>
     </div>
+  `).join('');
+}
 
-    <!-- 导航标签（聊天/通讯录） -->
-    <div class="sidebar-tabs">
-      <div class="tab active" data-tab="chats">聊天</div>
-      <div class="tab" data-tab="contacts">通讯录</div>
-    </div>
+// ============ 渲染消息 ============
+function renderMessages(messages) {
+  const container = document.getElementById('messageList');
+  container.innerHTML = '';
+  messages.forEach(msg => appendMessage(msg));
+}
 
-    <!-- 列表区域 -->
-    <div class="list-container" id="chatList">
-      <!-- 动态渲染聊天群组 -->
+function appendMessage(msg) {
+  const container = document.getElementById('messageList');
+  const isSelf = msg.sender_name === currentUser.name;
+  
+  const div = document.createElement('div');
+  div.className = `message-row ${isSelf ? 'self' : ''}`;
+  div.innerHTML = `
+    <div class="avatar">${escapeHtml(msg.sender_name.charAt(0).toUpperCase())}</div>
+    <div class="bubble-wrap">
+      <div class="sender-info">${escapeHtml(msg.sender_name)} · ${escapeHtml(msg.location || '')}</div>
+      <div class="bubble">${escapeHtml(msg.content)}</div>
+      <div class="time-tag">${formatTime(new Date(msg.created_at).getTime())}</div>
     </div>
-    <div class="list-container hidden" id="contactList">
-      <!-- 动态渲染在线用户 -->
-    </div>
+  `;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
 
-    <!-- 底部当前用户信息 -->
-    <div class="sidebar-footer">
-      <div class="my-info">
-        <span id="currentUserName"></span>
-        <span class="location" id="userLocation"></span>
-      </div>
-      <button id="logoutBtn">退出</button>
-    </div>
-  </aside>
+// ============ 发送消息 ============
+async function sendMessage() {
+  const input = document.getElementById('messageInput');
+  const text = input.value.trim();
+  if (!text || !currentGroup) return;
 
-  <!-- 右侧聊天区域 -->
-  <main class="chat-area">
-    <!-- 未选中任何聊天时的空白状态 -->
-    <div id="emptyState" class="empty-state">
-      <div class="empty-icon">💬</div>
-    </div>
+  const { error } = await supabaseClient.from('messages').insert({
+    group_id: currentGroup,
+    sender_name: currentUser.name,
+    location: currentUser.location,
+    content: text
+  });
 
-    <!-- 聊天会话区 -->
-    <div id="chatSession" class="chat-session hidden">
-      <header class="chat-header">
-        <h3 id="currentGroupName">群聊</h3>
-        <span id="onlineCount"></span>
-      </header>
-      <div class="message-list" id="messageList"></div>
-      <footer class="chat-input-bar">
-        <input type="text" id="messageInput" placeholder="输入消息...">
-        <button id="sendBtn">发送</button>
-      </footer>
-    </div>
-  </main>
-</div>
+  if (error) return alert('发送失败：' + error.message);
+  input.value = '';
+}
 
-<!-- 创建群聊弹窗 -->
-<div id="newGroupModal" class="modal hidden">
-  <div class="modal-content">
-    <h3>创建新群聊</h3>
-    <input type="text" id="newGroupNameInput" placeholder="群聊名称" maxlength="30">
-    <div class="modal-buttons">
-      <button id="cancelNewGroup">取消</button>
-      <button id="confirmNewGroup">创建</button>
-    </div>
-  </div>
-</div>
+document.getElementById('sendBtn').addEventListener('click', sendMessage);
+document.getElementById('messageInput').addEventListener('keydown', e => { if (e.key === 'Enter') sendMessage(); });
 
-<!-- 引入 Supabase 库 -->
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<!-- 你的业务逻辑 -->
-<script src="app.js"></script>
-</body>
-</html>
+// ============ 标签切换 ============
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    currentTab = tab.dataset.tab;
+    document.getElementById('chatList').classList.toggle('hidden', currentTab !== 'chats');
+    document.getElementById('contactList').classList.toggle('hidden', currentTab !== 'contacts');
+  });
+});
+
+// ============ 创建新群聊 ============
+document.getElementById('addBtn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  document.getElementById('addMenu').classList.toggle('hidden');
+});
+document.addEventListener('click', () => document.getElementById('addMenu').classList.add('hidden'));
+document.getElementById('addMenu').addEventListener('click', e => e.stopPropagation());
+
+document.getElementById('menuNewGroup').addEventListener('click', () => {
+  document.getElementById('newGroupModal').classList.remove('hidden');
+});
+document.getElementById('cancelNewGroup').addEventListener('click', () => {
+  document.getElementById('newGroupModal').classList.add('hidden');
+});
+
+document.getElementById('confirmNewGroup').addEventListener('click', async () => {
+  const name = document.getElementById('newGroupNameInput').value.trim();
+  if (!name) return alert('请输入群聊名称');
+
+  const { error } = await supabaseClient.from('groups').insert({ name });
+  
+  if (error) alert('创建群聊失败：' + error.message);
+  else {
+    document.getElementById('newGroupModal').classList.add('hidden');
+    document.getElementById('newGroupNameInput').value = '';
+  }
+});
+
+// ============ 退出登录 ============
+document.getElementById('logoutBtn').addEventListener('click', async () => {
+  if (presenceChannel) await presenceChannel.untrack();
+  localStorage.removeItem('chat_user');
+  location.reload();
+});
