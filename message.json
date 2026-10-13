@@ -1,0 +1,281 @@
+// ============ 配置区 ============
+const GITHUB_OWNER = '你的GitHub用户名';
+const GITHUB_REPO  = '你的仓库名';
+const GITHUB_TOKEN = 'ghp_xxxxxxxxxxxxxxxxxxxx'; // ⚠️ 仅测试用，生产环境切勿暴露
+const BRANCH       = 'main';
+const JSON_PATH    = 'message.json';
+const POLL_INTERVAL = 4000;
+
+// ============ 状态 ============
+let currentUser = null;
+let currentGroup = null;
+let lastUpdated = 0;
+let jsonSha = null;
+let currentTab = 'chats'; // 'chats' | 'contacts'
+
+// ============ 工具函数 ============
+async function fetchJson() {
+  const url = `https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/${BRANCH}/${JSON_PATH}?t=${Date.now()}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('fetch json failed');
+  return res.json();
+}
+
+async function getFileSha() {
+  const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${JSON_PATH}?ref=${BRANCH}`;
+  const res = await fetch(url, { headers: { Authorization: `token ${GITHUB_TOKEN}` } });
+  if (!res.ok) throw new Error('get sha failed');
+  const data = await res.json();
+  return data.sha;
+}
+
+async function updateJson(newData) {
+  if (!jsonSha) jsonSha = await getFileSha();
+  const content = btoa(unescape(encodeURIComponent(JSON.stringify(newData, null, 2))));
+  const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${JSON_PATH}`;
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: { Authorization: `token ${GITHUB_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: `chat update`, content, sha: jsonSha, branch: BRANCH })
+  });
+  if (!res.ok) throw new Error('update json failed');
+  const result = await res.json();
+  jsonSha = result.content.sha;
+  lastUpdated = Date.now();
+}
+
+async function fetchLocation() {
+  try {
+    const res = await fetch('http://ip-api.com/json/?lang=zh-CN');
+    const data = await res.json();
+    if (data.status === 'success') return `${data.country} · ${data.regionName} · ${data.city}`;
+  } catch (e) {}
+  return '未知位置';
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function formatTime(ts) {
+  const d = new Date(ts);
+  return `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
+}
+
+// ============ 登录 ============
+document.getElementById('loginBtn').addEventListener('click', async () => {
+  const name = document.getElementById('usernameInput').value.trim();
+  if (!name) return alert('请输入名称');
+  const location = await fetchLocation();
+  currentUser = { name, location, loginAt: Date.now() };
+  
+  let data = await fetchJson();
+  data.users = (data.users || []).filter(u => u.name !== name);
+  data.users.push({ name, location, lastSeen: Date.now() });
+  data.lastUpdated = Date.now();
+  await updateJson(data);
+
+  localStorage.setItem('chat_user', JSON.stringify(currentUser));
+  enterApp();
+});
+
+(async function tryRestore() {
+  const saved = localStorage.getItem('chat_user');
+  if (saved) {
+    currentUser = JSON.parse(saved);
+    enterApp();
+  }
+})();
+
+function enterApp() {
+  document.getElementById('loginScreen').classList.add('hidden');
+  document.getElementById('app').classList.remove('hidden');
+  document.getElementById('currentUserName').textContent = currentUser.name;
+  document.getElementById('userLocation').textContent = currentUser.location;
+  document.getElementById('myAvatar').textContent = currentUser.name.charAt(0).toUpperCase();
+  startPolling();
+}
+
+// ============ 轮询与同步 ============
+function startPolling() {
+  setInterval(async () => {
+    try {
+      const data = await fetchJson();
+      if (data.lastUpdated > lastUpdated) {
+        lastUpdated = data.lastUpdated;
+        renderAll(data);
+      }
+    } catch (e) {}
+  }, POLL_INTERVAL);
+  fetchJson().then(data => { lastUpdated = data.lastUpdated || 0; renderAll(data); });
+}
+
+function renderAll(data) {
+  renderGroups(data);
+  renderContacts(data);
+  if (currentGroup) renderMessages(data);
+}
+
+// ============ 渲染群聊列表 ============
+function renderGroups(data) {
+  const list = document.getElementById('chatList');
+  const groups = data.groups || [];
+  list.innerHTML = groups.map(g => {
+    const msgs = (data.messages || []).filter(m => m.groupId === g.id);
+    const lastMsg = msgs[msgs.length - 1];
+    return `
+      <div class="list-item ${g.id === currentGroup ? 'active' : ''}" data-id="${g.id}">
+        <div class="item-avatar">${escapeHtml(g.name.charAt(0))}</div>
+        <div class="item-info">
+          <div class="item-title">${escapeHtml(g.name)}</div>
+          <div class="item-desc">${lastMsg ? escapeHtml(lastMsg.sender + ': ' + lastMsg.text) : '暂无消息'}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+  list.querySelectorAll('.list-item').forEach(el => {
+    el.addEventListener('click', () => {
+      currentGroup = el.dataset.id;
+      renderGroups(data);
+      renderMessages(data);
+      document.getElementById('emptyState').classList.add('hidden');
+      document.getElementById('chatSession').classList.remove('hidden');
+    });
+  });
+}
+
+// ============ 渲染通讯录（在线用户） ============
+function renderContacts(data) {
+  const list = document.getElementById('contactList');
+  const now = Date.now();
+  const onlineUsers = (data.users || []).filter(u => now - u.lastSeen < 60000);
+  
+  list.innerHTML = onlineUsers.map(u => `
+    <div class="list-item">
+      <div class="item-avatar" style="background:${u.name === currentUser.name ? '#07c160' : '#4a90d9'}">
+        ${escapeHtml(u.name.charAt(0).toUpperCase())}
+      </div>
+      <div class="item-info">
+        <div class="item-title">${escapeHtml(u.name)} ${u.name === currentUser.name ? '(我)' : ''}</div>
+        <div class="item-desc">📍 ${escapeHtml(u.location || '未知')}</div>
+      </div>
+    </div>
+  `).join('') || '<div style="padding:20px;text-align:center;color:#999;">暂无人在线</div>';
+}
+
+// ============ 渲染消息 ============
+function renderMessages(data) {
+  const container = document.getElementById('messageList');
+  const msgs = (data.messages || []).filter(m => m.groupId === currentGroup);
+  container.innerHTML = msgs.map(m => {
+    const isSelf = m.sender === currentUser.name;
+    return `
+      <div class="message-row ${isSelf ? 'self' : ''}">
+        <div class="avatar">${escapeHtml(m.sender.charAt(0).toUpperCase())}</div>
+        <div class="bubble-wrap">
+          <div class="sender-info">${escapeHtml(m.sender)} · ${escapeHtml(m.location || '')}</div>
+          <div class="bubble">${escapeHtml(m.text)}</div>
+          <div class="time-tag">${formatTime(m.timestamp)}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+  container.scrollTop = container.scrollHeight;
+
+  const g = (data.groups || []).find(g => g.id === currentGroup);
+  if (g) document.getElementById('currentGroupName').textContent = g.name;
+  const now = Date.now();
+  const online = (data.users || []).filter(u => now - u.lastSeen < 60000);
+  document.getElementById('onlineCount').textContent = `${online.length} 人在线`;
+}
+
+// ============ 发送消息 ============
+async function sendMessage() {
+  const input = document.getElementById('messageInput');
+  const text = input.value.trim();
+  if (!text || !currentGroup) return;
+
+  const data = await fetchJson();
+  data.messages = data.messages || [];
+  data.messages.push({
+    id: Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+    sender: currentUser.name,
+    location: currentUser.location,
+    groupId: currentGroup,
+    text,
+    timestamp: Date.now()
+  });
+  const u = data.users.find(u => u.name === currentUser.name);
+  if (u) u.lastSeen = Date.now();
+  data.lastUpdated = Date.now();
+  await updateJson(data);
+  lastUpdated = data.lastUpdated;
+  input.value = '';
+  renderMessages(data);
+}
+
+document.getElementById('sendBtn').addEventListener('click', sendMessage);
+document.getElementById('messageInput').addEventListener('keydown', e => { if (e.key === 'Enter') sendMessage(); });
+
+// ============ 标签切换 ============
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    currentTab = tab.dataset.tab;
+    if (currentTab === 'chats') {
+      document.getElementById('chatList').classList.remove('hidden');
+      document.getElementById('contactList').classList.add('hidden');
+    } else {
+      document.getElementById('chatList').classList.add('hidden');
+      document.getElementById('contactList').classList.remove('hidden');
+    }
+  });
+});
+
+// ============ 创建新群聊 ============
+document.getElementById('addBtn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  document.getElementById('addMenu').classList.toggle('hidden');
+});
+document.addEventListener('click', () => document.getElementById('addMenu').classList.add('hidden'));
+document.getElementById('addMenu').addEventListener('click', e => e.stopPropagation());
+
+document.getElementById('menuNewGroup').addEventListener('click', () => {
+  document.getElementById('newGroupModal').classList.remove('hidden');
+});
+document.getElementById('cancelNewGroup').addEventListener('click', () => {
+  document.getElementById('newGroupModal').classList.add('hidden');
+});
+document.getElementById('confirmNewGroup').addEventListener('click', async () => {
+  const name = document.getElementById('newGroupNameInput').value.trim();
+  if (!name) return alert('请输入群聊名称');
+  const data = await fetchJson();
+  data.groups = data.groups || [];
+  const id = 'g_' + Date.now();
+  data.groups.push({ id, name, createdAt: Date.now() });
+  data.lastUpdated = Date.now();
+  await updateJson(data);
+  lastUpdated = data.lastUpdated;
+  document.getElementById('newGroupModal').classList.add('hidden');
+  document.getElementById('newGroupNameInput').value = '';
+  currentGroup = id;
+  renderGroups(data);
+  renderMessages(data);
+  document.getElementById('emptyState').classList.add('hidden');
+  document.getElementById('chatSession').classList.remove('hidden');
+});
+
+// ============ 退出登录 ============
+document.getElementById('logoutBtn').addEventListener('click', async () => {
+  try {
+    const data = await fetchJson();
+    data.users = (data.users || []).filter(u => u.name !== currentUser.name);
+    data.lastUpdated = Date.now();
+    await updateJson(data);
+  } catch (e) {}
+  localStorage.removeItem('chat_user');
+  location.reload();
+});
