@@ -1,0 +1,23 @@
+name: Download Supabase JS
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download Supabase
+        run: |
+          curl -L -o supabase.min.js https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.8/dist/main/umd/supabase.min.js
+          
+      - name: Commit and push
+        run: |
+          git config --global user.name 'GitHub Action'
+          git config --global user.email 'action@github.com'
+          git add supabase.min.js
+          git commit -m "Auto-download supabase.min.js" || exit 0
+          git push
