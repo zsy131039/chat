@@ -1,7 +1,15 @@
 // ============ 配置区 ============
 const SUPABASE_URL = 'https://wewivxsxrmhqeglyhjkj.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_sBYmEDVie3VOjQyxoeJ5Pw_mZaD06vr'; // 你的 Publishable key
-const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const SUPABASE_ANON_KEY = 'sb_publishable_sBYmEDVie3VOjQyxoeJ5Pw_mZaD06vr'; 
+
+// 检查库是否加载成功
+if (typeof supabase === 'undefined') {
+    alert('Supabase 库加载失败！请检查网络或刷新页面。');
+    throw new Error('Supabase library not loaded');
+}
+
+// 创建客户端，使用 supabaseClient 命名避免与全局 supabase 冲突
+const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ============ 状态 ============
 let currentUser = null;
@@ -10,12 +18,17 @@ let currentTab = 'chats';
 let presenceChannel = null;
 
 // ============ 工具函数 ============
+// 国内快速且支持 HTTPS 的 IP 归属地接口
 async function fetchLocation() {
   try {
-    const res = await fetch('http://ip-api.com/json/?lang=zh-CN');
+    const res = await fetch('https://api.vore.top/api/IPdata');
     const data = await res.json();
-    if (data.status === 'success') return `${data.country} · ${data.regionName} · ${data.city}`;
-  } catch (e) {}
+    if (data.ipdata) {
+      return `${data.ipdata.info1} · ${data.ipdata.info2} · ${data.ipdata.info3}`;
+    }
+  } catch (e) { 
+    console.warn('IP 归属地获取失败', e); 
+  }
   return '未知位置';
 }
 
@@ -38,13 +51,13 @@ document.getElementById('loginBtn').addEventListener('click', async () => {
   const location = await fetchLocation();
   currentUser = { name, location };
 
-  // 1. 将用户写入 Supabase 数据库
-  const { error } = await supabase
+  // 写入 Supabase
+  const { error } = await supabaseClient
     .from('profiles')
     .upsert({ name, location, last_seen: new Date().toISOString() });
 
   if (error) {
-    alert('登录失败，请检查数据库表是否已创建：' + error.message);
+    alert('登录失败，请检查 Supabase 数据库和 RLS 权限：\n' + error.message);
     return;
   }
 
@@ -57,8 +70,7 @@ document.getElementById('loginBtn').addEventListener('click', async () => {
   const saved = localStorage.getItem('chat_user');
   if (saved) {
     currentUser = JSON.parse(saved);
-    // 更新最后活跃时间
-    await supabase.from('profiles').update({ last_seen: new Date().toISOString() }).eq('name', currentUser.name);
+    await supabaseClient.from('profiles').update({ last_seen: new Date().toISOString() }).eq('name', currentUser.name);
     enterApp();
   }
 })();
@@ -70,19 +82,18 @@ async function enterApp() {
   document.getElementById('userLocation').textContent = currentUser.location;
   document.getElementById('myAvatar').textContent = currentUser.name.charAt(0).toUpperCase();
 
-  // 初始化实时功能
   initPresence();
   initGroupsRealtime();
-  // 默认加载第一个群组
-  const { data: groups } = await supabase.from('groups').select('*').order('created_at', { ascending: true }).limit(1);
+  
+  const { data: groups } = await supabaseClient.from('groups').select('*').order('created_at', { ascending: true }).limit(1);
   if (groups && groups.length > 0) {
     selectGroup(groups[0].id, groups[0].name);
   }
 }
 
-// ============ 在线状态 (Presence) ============
+// ============ 在线状态 ============
 function initPresence() {
-  presenceChannel = supabase.channel('online-users', {
+  presenceChannel = supabaseClient.channel('online-users', {
     config: { presence: { key: currentUser.name } }
   });
 
@@ -94,7 +105,6 @@ function initPresence() {
     })
     .subscribe(async (status) => {
       if (status === 'SUBSCRIBED') {
-        // 连接成功后，广播自己的在线状态
         await presenceChannel.track({
           name: currentUser.name,
           location: currentUser.location,
@@ -106,17 +116,12 @@ function initPresence() {
 
 // ============ 群组同步 ============
 async function initGroupsRealtime() {
-  // 1. 加载初始群组列表
-  const { data: groups, error } = await supabase.from('groups').select('*').order('created_at', { ascending: true });
-  if (!error && groups) {
-    renderGroups(groups);
-  }
+  const { data: groups, error } = await supabaseClient.from('groups').select('*').order('created_at', { ascending: true });
+  if (!error && groups) renderGroups(groups);
 
-  // 2. 监听新群组创建
-  supabase.channel('groups-channel')
+  supabaseClient.channel('groups-channel')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'groups' }, () => {
-      // 数据变了，重新拉取列表
-      supabase.from('groups').select('*').order('created_at', { ascending: true }).then(({ data }) => {
+      supabaseClient.from('groups').select('*').order('created_at', { ascending: true }).then(({ data }) => {
         if (data) renderGroups(data);
       });
     })
@@ -126,7 +131,6 @@ async function initGroupsRealtime() {
 // ============ 渲染群聊列表 ============
 function renderGroups(groups) {
   const list = document.getElementById('chatList');
-  // 注意：这里由于没有预加载所有消息，预览文字暂时显示“点击进入聊天”
   list.innerHTML = groups.map(g => `
     <div class="list-item ${g.id === currentGroup ? 'active' : ''}" data-id="${g.id}" data-name="${escapeHtml(g.name)}">
       <div class="item-avatar">${escapeHtml(g.name.charAt(0))}</div>
@@ -138,9 +142,7 @@ function renderGroups(groups) {
   `).join('');
   
   list.querySelectorAll('.list-item').forEach(el => {
-    el.addEventListener('click', () => {
-      selectGroup(el.dataset.id, el.dataset.name);
-    });
+    el.addEventListener('click', () => selectGroup(el.dataset.id, el.dataset.name));
   });
 }
 
@@ -151,13 +153,11 @@ async function selectGroup(groupId, groupName) {
   document.getElementById('chatSession').classList.remove('hidden');
   document.getElementById('currentGroupName').textContent = groupName;
   
-  // 高亮当前群组
   document.querySelectorAll('#chatList .list-item').forEach(el => {
     el.classList.toggle('active', el.dataset.id === groupId);
   });
 
-  // 1. 加载历史消息
-  const { data: messages } = await supabase
+  const { data: messages } = await supabaseClient
     .from('messages')
     .select('*')
     .eq('group_id', groupId)
@@ -166,14 +166,10 @@ async function selectGroup(groupId, groupName) {
   
   if (messages) renderMessages(messages);
 
-  // 2. 订阅该群组的新消息
-  supabase.channel(`messages-${groupId}`)
+  supabaseClient.channel(`messages-${groupId}`)
     .on('postgres_changes', 
       { event: 'INSERT', schema: 'public', table: 'messages', filter: `group_id=eq.${groupId}` }, 
-      (payload) => {
-        // 收到新消息，追加到界面
-        appendMessage(payload.new);
-      }
+      (payload) => appendMessage(payload.new)
     )
     .subscribe();
 }
@@ -185,10 +181,7 @@ function renderContacts(onlineUsers) {
     list.innerHTML = '<div style="padding:20px;text-align:center;color:#999;">暂无人在线</div>';
     return;
   }
-
-  // 去重（因为 Presence 可能会有多个相同的 key）
   const uniqueUsers = Array.from(new Map(onlineUsers.map(u => [u.name, u])).values());
-
   list.innerHTML = uniqueUsers.map(u => `
     <div class="list-item">
       <div class="item-avatar" style="background:${u.name === currentUser.name ? '#07c160' : '#4a90d9'}">
@@ -233,19 +226,14 @@ async function sendMessage() {
   const text = input.value.trim();
   if (!text || !currentGroup) return;
 
-  // 插入到 Supabase，Realtime 会自动推送到所有客户端
-  const { error } = await supabase.from('messages').insert({
+  const { error } = await supabaseClient.from('messages').insert({
     group_id: currentGroup,
     sender_name: currentUser.name,
     location: currentUser.location,
     content: text
   });
 
-  if (error) {
-    alert('发送失败：' + error.message);
-    return;
-  }
-  
+  if (error) return alert('发送失败：' + error.message);
   input.value = '';
 }
 
@@ -258,13 +246,8 @@ document.querySelectorAll('.tab').forEach(tab => {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     tab.classList.add('active');
     currentTab = tab.dataset.tab;
-    if (currentTab === 'chats') {
-      document.getElementById('chatList').classList.remove('hidden');
-      document.getElementById('contactList').classList.add('hidden');
-    } else {
-      document.getElementById('chatList').classList.add('hidden');
-      document.getElementById('contactList').classList.remove('hidden');
-    }
+    document.getElementById('chatList').classList.toggle('hidden', currentTab !== 'chats');
+    document.getElementById('contactList').classList.toggle('hidden', currentTab !== 'contacts');
   });
 });
 
@@ -287,11 +270,10 @@ document.getElementById('confirmNewGroup').addEventListener('click', async () =>
   const name = document.getElementById('newGroupNameInput').value.trim();
   if (!name) return alert('请输入群聊名称');
 
-  const { error } = await supabase.from('groups').insert({ name });
+  const { error } = await supabaseClient.from('groups').insert({ name });
   
-  if (error) {
-    alert('创建群聊失败：' + error.message);
-  } else {
+  if (error) alert('创建群聊失败：' + error.message);
+  else {
     document.getElementById('newGroupModal').classList.add('hidden');
     document.getElementById('newGroupNameInput').value = '';
   }
@@ -299,9 +281,7 @@ document.getElementById('confirmNewGroup').addEventListener('click', async () =>
 
 // ============ 退出登录 ============
 document.getElementById('logoutBtn').addEventListener('click', async () => {
-  if (presenceChannel) {
-    await presenceChannel.untrack();
-  }
+  if (presenceChannel) await presenceChannel.untrack();
   localStorage.removeItem('chat_user');
   location.reload();
 });
