@@ -9,7 +9,6 @@
 </head>
 <body>
 
-<!-- 登录界面 -->
 <div id="loginScreen" class="login-screen">
   <div class="login-box">
     <div class="logo">💬</div>
@@ -20,7 +19,6 @@
   </div>
 </div>
 
-<!-- 主界面 -->
 <div id="app" class="app hidden">
   <aside class="sidebar">
     <div class="sidebar-top">
@@ -66,7 +64,6 @@
   </main>
 </div>
 
-<!-- 创建群聊弹窗 -->
 <div id="newGroupModal" class="modal hidden">
   <div class="modal-content">
     <h3>创建新群聊</h3>
@@ -78,9 +75,45 @@
   </div>
 </div>
 
-<!-- 引入 Supabase 库 (经过验证，稳定可用) -->
-<script src="https://npm.elemecdn.com/@supabase/supabase-js@2.39.8/dist/main/umd/supabase.min.js"></script>
-<!-- 引入业务逻辑 -->
-<script src="app.js"></script>
+<!-- 自动加载 Supabase 的备用 CDN 列表 -->
+<script>
+  const cdns = [
+    'https://unpkg.zhimg.com/@supabase/supabase-js@2.39.8/dist/main/umd/supabase.min.js',
+    'https://cdn.staticfile.org/supabase-js/2.39.8/supabase.min.js',
+    'https://npm.elemecdn.com/@supabase/supabase-js@2.39.8/dist/main/umd/supabase.min.js',
+    'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.8/dist/main/umd/supabase.min.js'
+  ];
+  let currentIndex = 0;
+
+  function loadSupabase() {
+    if (currentIndex >= cdns.length) {
+      alert('Supabase 库加载失败，请检查网络或更换网络环境！');
+      return;
+    }
+    const url = cdns[currentIndex];
+    const script = document.createElement('script');
+    script.src = url;
+    
+    // 加载成功，启动 app.js
+    script.onload = () => {
+      console.log('Supabase 库加载成功！');
+      const appScript = document.createElement('script');
+      appScript.src = 'app.js';
+      document.body.appendChild(appScript);
+    };
+    
+    // 加载失败，尝试下一个
+    script.onerror = () => {
+      console.warn('当前 CDN 失败，尝试下一个...');
+      currentIndex++;
+      loadSupabase();
+    };
+    
+    document.head.appendChild(script);
+  }
+  
+  // 开始加载
+  loadSupabase();
+</script>
 </body>
 </html>
